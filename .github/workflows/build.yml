@@ -1,4 +1,4 @@
-name: Build APK & Telegram Wake
+name: Build APK & Telegram Wake (Python)
 
 on:
   workflow_dispatch:
@@ -24,49 +24,62 @@ jobs:
       - name: 4. ساخت فایل نصبی (APK)
         run: flutter build apk --debug
 
-      - name: 5. ارسال فایل APK به ربات تلگرام
+      - name: 5. ارسال و بیدار ماندن ۱۰ دقیقه (پایتون)
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          APK_PATH="build/app/outputs/flutter-apk/app-debug.apk"
-          echo "📤 در حال ارسال فایل به تلگرام..."
-          curl -F "document=@${APK_PATH}" -F "chat_id=${CHAT_ID}" \
-               "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
-          echo "✅ فایل ارسال شد."
+          python3 - << ENDPYTHON
+          import requests, time, os, sys
 
-      - name: 6. بیدار ماندن ربات برای ۱۰ دقیقه (پاسخ به /start)
-        env:
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        run: |
-          APK_PATH="build/app/outputs/flutter-apk/app-debug.apk"
-          END_TIME=$(( $(date +%s) + 600 ))  # 600 ثانیه = 10 دقیقه
-          OFFSET=0
+          BOT_TOKEN = os.environ['BOT_TOKEN']
+          YOUR_CHAT_ID = os.environ['CHAT_ID']
+          APK_PATH = "build/app/outputs/flutter-apk/app-debug.apk"
+          BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-          echo "⏰ ربات تا ۱۰ دقیقه دیگر بیدار می‌ماند..."
+          # ---- تابع ارسال فایل ----
+          def send_apk(chat_id):
+              url = f"{BASE_URL}/sendDocument"
+              with open(APK_PATH, 'rb') as f:
+                  files = {'document': f}
+                  data = {'chat_id': chat_id}
+                  r = requests.post(url, files=files, data=data)
+              return r.json()
 
-          while [ $(date +%s) -lt $END_TIME ]; do
-            # دریافت پیام‌های جدید
-            UPDATES=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=$OFFSET&timeout=5")
-            
-            # استخراج chat_id و متن پیام‌هایی که /start فرستاده‌اند
-            echo "$UPDATES" | jq -r '.result[] | select(.message.text=="/start") | 
-              "\(.update_id) \(.message.chat.id)"' | while read UPDATE_ID CHAT_ID; do
-              echo "🔔 دریافت /start از $CHAT_ID"
-              # ارسال فایل
-              curl -F "document=@${APK_PATH}" -F "chat_id=${CHAT_ID}" \
-                   "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
-              # به‌روزرسانی offset برای تایید دریافت پیام
-              OFFSET=$((UPDATE_ID + 1))
-            done
+          # ---- 1. ارسال اولیه به خودمون ----
+          print("📤 ارسال فایل اولیه به خودت...")
+          resp = send_apk(YOUR_CHAT_ID)
+          if resp.get('ok'):
+              print("✅ فایل با موفقیت ارسال شد.")
+          else:
+              print("❌ خطا در ارسال اولیه:", resp)
+              sys.exit(1)
 
-            # اگر آفست جدیدی از حلقه داخلی داریم، اعمال کن
-            if [ -n "$OFFSET" ]; then
-              # فقط کافیه offset آخرین پیام رو تنظیم کنیم
-              : # این کار توی حلقه انجام شده
-            fi
+          # ---- 2. بیدار ماندن ۱۰ دقیقه و پاسخ به /start ----
+          END_TIME = time.time() + 600  # 10 دقیقه
+          last_update_id = -1
 
-            sleep 10  # هر ۱۰ ثانیه چک کن
-          done
+          print("⏰ ربات برای ۱۰ دقیقه بیدار می‌ماند. برای دریافت فایل /start بزنید.")
+          while time.time() < END_TIME:
+              # دریافت پیام‌های جدید
+              url = f"{BASE_URL}/getUpdates?timeout=5&offset={last_update_id + 1}"
+              try:
+                  updates = requests.get(url).json()
+              except Exception as e:
+                  print("⚠️ خطا در دریافت به‌روزرسانی:", e)
+                  time.sleep(2)
+                  continue
 
-          echo "😴 ربات به حالت خواب فرو رفت. برای بیدار شدن دوباره workflow را اجرا کنید."
+              if updates.get('result'):
+                  for upd in updates['result']:
+                      last_update_id = upd['update_id']
+                      msg = upd.get('message')
+                      if msg and msg.get('text') == '/start':
+                          chat_id = str(msg['chat']['id'])
+                          print(f"🔔 دستور /start از {chat_id} دریافت شد. ارسال فایل...")
+                          send_apk(chat_id)
+
+              time.sleep(3)
+
+          print("😴 ۱۰ دقیقه تمام شد. ربات به خواب رفت.")
+          ENDPYTHON
