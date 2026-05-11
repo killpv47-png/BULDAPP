@@ -18,7 +18,17 @@ class GoogleScriptProxy {
 
   Future<void> _handleRequest(HttpRequest request) async {
     try {
-      var body = await request.transform(utf8.decoder).join();
+      // ----- 这里是修改的地方 -----
+      // 将 Stream 先转换为 List<int>，再 decode，解决了 Utf8Decoder 类型错误
+      final bodyBytes = await request.fold<List<int>>([], (prev, chunk) => prev..addAll(chunk));
+      final body = utf8.decode(bodyBytes);
+      
+      // 手动构建一个 Map<String, String> 来兼容类型检查
+      final headersMap = <String, String>{};
+      request.headers.forEach((name, values) {
+        headersMap[name] = values.join(', ');
+      });
+      // ----- 修改结束 -----
 
       var response = await http.post(
         Uri.parse(scriptUrl),
@@ -26,7 +36,7 @@ class GoogleScriptProxy {
         body: jsonEncode({
           'url': request.uri.toString(),
           'method': request.method,
-          'headers': Map<String, String>.from(request.headers),
+          'headers': headersMap,
           'body': body,
         }),
       );
