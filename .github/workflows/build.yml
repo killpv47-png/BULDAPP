@@ -1,4 +1,4 @@
-name: Build APK & Telegram Wake (Python)
+name: Build APK (Split) & Telegram Wake
 
 on:
   workflow_dispatch:
@@ -21,47 +21,52 @@ jobs:
       - name: 3. دریافت کتابخونه‌های مورد نیاز
         run: flutter pub get
 
-      - name: 4. ساخت فایل نصبی (APK)
-        run: flutter build apk --debug
+      - name: 4. ساخت فایل‌های نصبی (تقسیم شده بر اساس ABI)
+        run: flutter build apk --split-per-abi
 
-      - name: 5. ارسال و بیدار ماندن ۱۰ دقیقه (پایتون)
+      - name: 5. ارسال هر سه نسخه APK به تلگرام
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
+          BASE_DIR="build/app/outputs/flutter-apk"
+          
+          for apk in "$BASE_DIR"/app-*-release.apk; do
+            echo "📤 ارسال فایل $(basename "$apk") ..."
+            curl -s -F "document=@${apk}" \
+                 -F "chat_id=${CHAT_ID}" \
+                 "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
+            echo ""
+            sleep 2
+          done
+          
+          echo "✅ تمام فایل‌ها ارسال شدند."
+
+      - name: 6. ۱۰ دقیقه بیداری برای پاسخ به /start (ارسال دوباره همان ۳ فایل)
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
           python3 - << ENDPYTHON
-          import requests, time, os, sys
+          import requests, time, os, glob
 
           BOT_TOKEN = os.environ['BOT_TOKEN']
-          YOUR_CHAT_ID = os.environ['CHAT_ID']
-          APK_PATH = "build/app/outputs/flutter-apk/app-debug.apk"
           BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+          APK_FILES = glob.glob("build/app/outputs/flutter-apk/app-*-release.apk")
+          
+          def send_all_apks(chat_id):
+              for apk_path in APK_FILES:
+                  with open(apk_path, 'rb') as f:
+                      requests.post(f"{BASE_URL}/sendDocument",
+                                    data={'chat_id': chat_id},
+                                    files={'document': f})
+                  time.sleep(1)
 
-          # ---- تابع ارسال فایل ----
-          def send_apk(chat_id):
-              url = f"{BASE_URL}/sendDocument"
-              with open(APK_PATH, 'rb') as f:
-                  files = {'document': f}
-                  data = {'chat_id': chat_id}
-                  r = requests.post(url, files=files, data=data)
-              return r.json()
-
-          # ---- 1. ارسال اولیه به خودمون ----
-          print("📤 ارسال فایل اولیه به خودت...")
-          resp = send_apk(YOUR_CHAT_ID)
-          if resp.get('ok'):
-              print("✅ فایل با موفقیت ارسال شد.")
-          else:
-              print("❌ خطا در ارسال اولیه:", resp)
-              sys.exit(1)
-
-          # ---- 2. بیدار ماندن ۱۰ دقیقه و پاسخ به /start ----
-          END_TIME = time.time() + 600  # 10 دقیقه
+          # ---- بیدار ماندن به مدت ۱۰ دقیقه ----
+          END_TIME = time.time() + 600
           last_update_id = -1
 
-          print("⏰ ربات برای ۱۰ دقیقه بیدار می‌ماند. برای دریافت فایل /start بزنید.")
+          print("⏰ ربات برای ۱۰ دقیقه بیدار ماند و به /start پاسخ می‌دهد...")
           while time.time() < END_TIME:
-              # دریافت پیام‌های جدید
               url = f"{BASE_URL}/getUpdates?timeout=5&offset={last_update_id + 1}"
               try:
                   updates = requests.get(url).json()
@@ -76,8 +81,8 @@ jobs:
                       msg = upd.get('message')
                       if msg and msg.get('text') == '/start':
                           chat_id = str(msg['chat']['id'])
-                          print(f"🔔 دستور /start از {chat_id} دریافت شد. ارسال فایل...")
-                          send_apk(chat_id)
+                          print(f"🔔 دریافت /start از {chat_id}")
+                          send_all_apks(chat_id)
 
               time.sleep(3)
 
