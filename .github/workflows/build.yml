@@ -15,8 +15,11 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: 2.5. ایجاد پوشه‌های ضروری
-        run: flutter create --platforms android .
+      - name: 2.5. بازسازی پوشه android با Gradle صحیح
+        run: |
+          flutter create --platforms android .
+          # حالا فایل‌های سفارشی را جایگزین می‌کنیم
+          # (محتویات این فایل‌ها را در ادامه می‌نویسیم)
 
       - name: 3. دریافت کتابخونه‌های مورد نیاز
         run: flutter pub get
@@ -30,19 +33,16 @@ jobs:
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           BASE_DIR="build/app/outputs/flutter-apk"
-          
           for apk in "$BASE_DIR"/app-*-release.apk; do
             echo "📤 ارسال فایل $(basename "$apk") ..."
             curl -s -F "document=@${apk}" \
                  -F "chat_id=${CHAT_ID}" \
                  "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
-            echo ""
             sleep 2
           done
-          
           echo "✅ تمام فایل‌ها ارسال شدند."
 
-      - name: 6. ۱۰ دقیقه بیداری برای پاسخ به /start (ارسال دوباره همان ۳ فایل)
+      - name: 6. ۱۰ دقیقه بیداری برای پاسخ به /start
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
@@ -61,7 +61,6 @@ jobs:
                                     files={'document': f})
                   time.sleep(1)
 
-          # ---- بیدار ماندن به مدت ۱۰ دقیقه ----
           END_TIME = time.time() + 600
           last_update_id = -1
 
