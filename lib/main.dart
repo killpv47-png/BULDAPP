@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'proxy.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'dart:async';
+import 'proxy_server.dart';
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized(); // 确保 Flutter 环境初始化
-  runApp(const GateApp());
-}
+void main() => runApp(const GateApp());
 
 class GateApp extends StatelessWidget {
   const GateApp({super.key});
@@ -14,222 +13,345 @@ class GateApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Gate',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.lightBlue.shade200,
+          seedColor: const Color(0xFF90CAF9),
           brightness: Brightness.light,
         ),
         scaffoldBackgroundColor: const Color(0xFFE3F2FD),
-        useMaterial3: true,
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF90CAF9),
+          foregroundColor: Colors.white,
+          elevation: 0,
+        ),
+        cardTheme: CardTheme(
+          elevation: 2,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        ),
       ),
-      home: const GateHome(),
+      home: const HomePage(),
     );
   }
 }
 
-class GateHome extends StatefulWidget {
-  const GateHome({super.key});
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
 
   @override
-  State<GateHome> createState() => _GateHomeState();
+  State<HomePage> createState() => _HomePageState();
 }
 
-class _GateHomeState extends State<GateHome> {
-  final TextEditingController _urlController = TextEditingController();
-  final TextEditingController _scriptController = TextEditingController();
-  InAppWebViewController? _webController;
-  GoogleScriptProxy? _proxy;
-  bool _googleMode = true;
-  String _currentUrl = '';
+class _HomePageState extends State<HomePage> {
+  // فرم‌ها
+  final _deployIdController = TextEditingController();
+  final _keyController = TextEditingController();
+  
+  // وضعیت‌ها
+  bool _vpnActive = false;
+  bool _loading = false;
+  
+  // پروکسی و سرویس VPN
+  GateProxy? _proxy;
+  static const _vpnChannel = MethodChannel('com.gate.app/vpn');
+  
+  // نمایش سرعت
+  double _downloadSpeed = 0.0;
+  double _uploadSpeed = 0.0;
+  Timer? _speedTimer;
+  
+  // لاگ‌ها
+  List<LogEntry> _logs = [];
 
   @override
   void initState() {
     super.initState();
-    _loadSettings();
+    _loadConfig();
   }
 
-  Future<void> _loadSettings() async {
+  Future<void> _loadConfig() async {
     final prefs = await SharedPreferences.getInstance();
-    final savedScript = prefs.getString('script_url');
-    if (savedScript != null) {
-      _scriptController.text = savedScript;
-      _startProxy(savedScript);
-    }
+    _deployIdController.text = prefs.getString('deploy_id') ?? '';
+    _keyController.text = prefs.getString('auth_key') ?? '';
   }
 
-  Future<void> _startProxy(String scriptUrl) async {
-    _proxy?.stop();
-    _proxy = GoogleScriptProxy(scriptUrl);
-    await _proxy!.start();
-    _applyProxySettings();
+  Future<void> _saveConfig() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('deploy_id', _deployIdController.text);
+    await prefs.setString('auth_key', _keyController.text);
   }
 
-  Future<void> _toggleGoogleMode(bool value) async {
-    setState(() => _googleMode = value);
-    _applyProxySettings();
-    _reloadCurrentUrl();
-  }
-
-  // ----- 这里是用官方方法设置代理的地方 -----
-  Future<void> _applyProxySettings() async {
-    if (!mounted) return;
-
-    // 检查平台是否支持该功能
-    bool proxyAvailable = await WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE);
-    if (!proxyAvailable) {
-      if(mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('当前设备不支持代理设置')),
-        );
-      }
+  // شروع VPN
+  Future<void> _startVpn() async {
+    if (_deployIdController.text.isEmpty || _keyController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Deployment ID و Key را وارد کنید')),
+      );
       return;
     }
 
-    ProxyController proxyController = ProxyController.instance();
-    
-    if (_googleMode && _proxy != null) {
-      // 启用代理：将所有流量定向到我们的本地代理服务器
-      await proxyController.setProxyOverride(
-        settings: ProxySettings(
-          proxyRules: [
-            ProxyRule(url: "127.0.0.1:${_proxy!.port}"),
-          ],
-        ),
-      );
-    } else {
-      // 禁用代理：清除覆盖，使用系统默认设置
-      await proxyController.clearProxyOverride();
-    }
-  }
-  // ----- 修改结束 -----
+    setState(() => _loading = true);
 
-  void _reloadCurrentUrl() {
-    if (_currentUrl.isNotEmpty && _webController != null) {
-      _webController!.loadUrl(urlRequest: URLRequest(url: WebUri(_currentUrl)));
-    }
-  }
-
-  void _navigate(String url) {
-    var uri = url;
-    if (!uri.startsWith('http://') && !uri.startsWith('https://')) {
-      uri = 'https://$url';
-    }
-    setState(() => _currentUrl = uri);
-    _webController?.loadUrl(urlRequest: URLRequest(url: WebUri(uri)));
-  }
-
-  Future<void> _saveScript() async {
-    final url = _scriptController.text.trim();
-    if (url.isEmpty) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('script_url', url);
-    await _startProxy(url);
-    if(mounted) {
+    try {
+      // راه‌اندازی پروکسی داخلی
+      _proxy = GateProxy(_deployIdController.text, _keyController.text);
+      await _proxy!.start();
+      
+      // فراخوانی سرویس VPN در لایه native (اندروید)
+      final bool result = await _vpnChannel.invokeMethod('startVpn', {
+        'proxyPort': _proxy!.port,
+      });
+      
+      if (result) {
+        setState(() {
+          _vpnActive = true;
+          _loading = false;
+        });
+        // شروع دریافت سرعت‌ها
+        _speedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+          setState(() {
+            _downloadSpeed = _proxy?.downloadMonitor.currentSpeed ?? 0;
+            _uploadSpeed = _proxy?.uploadMonitor.currentSpeed ?? 0;
+            _logs = _proxy?.logManager.logs ?? [];
+          });
+        });
+        _saveConfig();
+      } else {
+        throw Exception('VPN service failed to start');
+      }
+    } catch (e) {
+      setState(() => _loading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('اسکریپت ذخیره و پروکسی فعال شد')),
+        SnackBar(content: Text('خطا در راه‌اندازی VPN: $e')),
       );
     }
+  }
+
+  // توقف VPN
+  Future<void> _stopVpn() async {
+    _speedTimer?.cancel();
+    await _vpnChannel.invokeMethod('stopVpn');
+    _proxy?.stop();
+    setState(() {
+      _vpnActive = false;
+      _downloadSpeed = 0;
+      _uploadSpeed = 0;
+      _logs = [];
+    });
+  }
+
+  @override
+  void dispose() {
+    _speedTimer?.cancel();
+    _proxy?.stop();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Gate'),
-        backgroundColor: Colors.lightBlue.shade300,
-        leading: Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: CustomPaint(
-            painter: KavianiPainter(),
-          ),
+        title: Row(
+          children: [
+            Container(
+              width: 32, height: 32,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: Colors.white),
+              ),
+              child: CustomPaint(painter: KavianiPainter()),
+            ),
+            const SizedBox(width: 8),
+            const Text('Gate VPN', style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
         ),
         actions: [
-          // Google Mode 开关
-          Switch(
-            value: _googleMode,
-            onChanged: _toggleGoogleMode,
-            activeColor: Colors.white,
-            inactiveThumbColor: Colors.grey,
-          ),
           IconButton(
             icon: const Icon(Icons.settings),
-            onPressed: () => _showSettingsDialog(),
+            onPressed: _showSettings,
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Row(
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // کارت وضعیت VPN
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  children: [
+                    Icon(
+                      _vpnActive ? Icons.lock_open : Icons.lock,
+                      size: 48,
+                      color: _vpnActive ? Colors.green : Colors.red,
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      _vpnActive ? 'VPN فعال' : 'VPN غیرفعال',
+                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 20),
+                    // دکمه اتصال/قطع
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _loading ? null : (_vpnActive ? _stopVpn : _startVpn),
+                        icon: Icon(_vpnActive ? Icons.power_settings_new : Icons.play_arrow),
+                        label: Text(_loading
+                            ? 'در حال اتصال...'
+                            : (_vpnActive ? 'قطع اتصال' : 'اتصال')),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _vpnActive ? Colors.red : Colors.green,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            // کارت نمایش سرعت
+            Row(
               children: [
                 Expanded(
-                  child: TextField(
-                    controller: _urlController,
-                    decoration: const InputDecoration(
-                      hintText: 'آدرس سایت را وارد کنید',
-                      border: OutlineInputBorder(),
-                      filled: true,
-                      fillColor: Colors.white,
+                  child: Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        children: [
+                          const Icon(Icons.download, color: Colors.blue),
+                          const Text('دانلود'),
+                          const SizedBox(height: 4),
+                          Text(
+                            _formatSpeed(_downloadSpeed),
+                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
                     ),
-                    onSubmitted: (value) => _navigate(value),
                   ),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.arrow_forward),
-                  onPressed: () => _navigate(_urlController.text),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        children: [
+                          const Icon(Icons.upload, color: Colors.orange),
+                          const Text('آپلود'),
+                          const SizedBox(height: 4),
+                          Text(
+                            _formatSpeed(_uploadSpeed),
+                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
               ],
             ),
-          ),
-          Expanded(
-            child: InAppWebView(
-              initialUrlRequest: URLRequest(url: WebUri('about:blank')),
-              onWebViewCreated: (controller) {
-                _webController = controller;
-                _applyProxySettings();
-              },
-              onLoadStart: (controller, url) {
-                setState(() => _currentUrl = url.toString());
-              },
+            const SizedBox(height: 16),
+            // لاگ
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('لاگ فعالیت‌ها', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 150,
+                      child: ListView.builder(
+                        itemCount: _logs.length,
+                        itemBuilder: (_, index) {
+                          final entry = _logs[index];
+                          return Text(
+                            '${entry.timestamp.toString().substring(11, 19)} - ${entry.message}',
+                            style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  void _showSettingsDialog() {
+  String _formatSpeed(double bytesPerSec) {
+    if (bytesPerSec < 1024) return '${bytesPerSec.toStringAsFixed(0)} B/s';
+    if (bytesPerSec < 1048576) return '${(bytesPerSec / 1024).toStringAsFixed(1)} KB/s';
+    return '${(bytesPerSec / 1048576).toStringAsFixed(2)} MB/s';
+  }
+
+  void _showSettings() {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('تنظیمات اسکریپت گوگل'),
-        content: TextField(
-          controller: _scriptController,
-          decoration: const InputDecoration(
-            hintText: 'شناسه Deployment اسکریپت را وارد کنید',
+      builder: (ctx) => AlertDialog(
+        title: const Text('تنظیمات اتصال'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _deployIdController,
+                decoration: const InputDecoration(
+                  labelText: 'Deployment ID',
+                  hintText: 'AKfycbw...',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _keyController,
+                decoration: const InputDecoration(
+                  labelText: 'Auth Key',
+                  hintText: 'کلید امنیتی اسکریپت',
+                  border: OutlineInputBorder(),
+                ),
+                obscureText: true,
+              ),
+            ],
           ),
         ),
         actions: [
-          TextButton(onPressed: _saveScript, child: const Text('ذخیره')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('انصراف')),
+          TextButton(
+            onPressed: () {
+              _saveConfig();
+              Navigator.pop(ctx);
+            },
+            child: const Text('ذخیره'),
+          ),
         ],
       ),
     );
   }
 }
 
-// 波斯帝国旗标绘制器（保持不变）
+// نقاش پرچم هخامنشی (درفش کاویانی)
 class KavianiPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final bgPaint = Paint()..color = const Color(0xFFC62828);
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), bgPaint);
-    final goldPaint = Paint()..color = Colors.amber.shade700;
-    canvas.drawRect(Rect.fromLTWH(size.width * 0.4, 0, size.width * 0.2, size.height), goldPaint);
-    final sunPaint = Paint()..color = Colors.yellow;
-    canvas.drawCircle(Offset(size.width * 0.5, size.height * 0.5), size.width * 0.15, sunPaint);
+    final bg = Paint()..color = const Color(0xFFC62828);
+    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), bg);
+    final gold = Paint()..color = Colors.amber.shade700;
+    canvas.drawRect(Rect.fromLTWH(size.width * 0.4, 0, size.width * 0.2, size.height), gold);
+    final sun = Paint()..color = Colors.yellow;
+    canvas.drawCircle(Offset(size.width * 0.5, size.height * 0.5), size.width * 0.15, sun);
   }
 
   @override
