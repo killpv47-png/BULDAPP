@@ -1,4 +1,4 @@
-name: Build APK & Update Link
+name: Build APK & Telegram Wake
 
 on:
   workflow_dispatch:
@@ -18,45 +18,55 @@ jobs:
       - name: 2.5. ایجاد پوشه‌های ضروری
         run: flutter create --platforms android .
 
-      - name: 3. دریافت کتابخونه‌ها
+      - name: 3. دریافت کتابخونه‌های مورد نیاز
         run: flutter pub get
 
-      - name: 4. ساخت فایل APK
+      - name: 4. ساخت فایل نصبی (APK)
         run: flutter build apk --debug
 
-      - name: 5. آپلود فایل و دریافت لینک عمومی
-        id: upload
+      - name: 5. ارسال فایل APK به ربات تلگرام
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           APK_PATH="build/app/outputs/flutter-apk/app-debug.apk"
-          # آپلود روی transfer.sh (رایگان، بدون ثبت‌نام)
-          LINK=$(curl --upload-file "$APK_PATH" https://transfer.sh/app-debug.apk)
-          echo "لینک دانلود: $LINK"
-          echo "link=$LINK" >> $GITHUB_OUTPUT
+          echo "📤 در حال ارسال فایل به تلگرام..."
+          curl -F "document=@${APK_PATH}" -F "chat_id=${CHAT_ID}" \
+               "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
+          echo "✅ فایل ارسال شد."
 
-      - name: 6. به‌روزرسانی لینک در گوگل درایو
+      - name: 6. بیدار ماندن ربات برای ۱۰ دقیقه (پاسخ به /start)
         env:
-          DRIVE_FILE_ID: ${{ secrets.DRIVE_FILE_ID }}
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
-          # نصب گوگل کلاینت
-          sudo apt-get install -y python3-pip
-          pip3 install --upgrade google-api-python-client google-auth
-          
-          # اسکریپت پایتون برای نوشتن لینک در فایل درایو
-          python3 << EOF
-          from google.oauth2 import service_account
-          from googleapiclient.discovery import build
-          import os, json
+          APK_PATH="build/app/outputs/flutter-apk/app-debug.apk"
+          END_TIME=$(( $(date +%s) + 600 ))  # 600 ثانیه = 10 دقیقه
+          OFFSET=0
 
-          creds = service_account.Credentials.from_service_account_info(
-              json.loads(os.environ['GCP_SA_KEY']),
-              scopes=['https://www.googleapis.com/auth/drive.file']
-          )
-          service = build('drive', 'v3', credentials=creds)
-          media = service.files().update(
-              fileId=os.environ['DRIVE_FILE_ID'],
-              media_body='${{ steps.upload.outputs.link }}',
-              media_mime_type='text/plain'
-          ).execute()
-          print("✅ لینک در فایل درایو ذخیره شد.")
-          EOF
+          echo "⏰ ربات تا ۱۰ دقیقه دیگر بیدار می‌ماند..."
+
+          while [ $(date +%s) -lt $END_TIME ]; do
+            # دریافت پیام‌های جدید
+            UPDATES=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=$OFFSET&timeout=5")
+            
+            # استخراج chat_id و متن پیام‌هایی که /start فرستاده‌اند
+            echo "$UPDATES" | jq -r '.result[] | select(.message.text=="/start") | 
+              "\(.update_id) \(.message.chat.id)"' | while read UPDATE_ID CHAT_ID; do
+              echo "🔔 دریافت /start از $CHAT_ID"
+              # ارسال فایل
+              curl -F "document=@${APK_PATH}" -F "chat_id=${CHAT_ID}" \
+                   "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
+              # به‌روزرسانی offset برای تایید دریافت پیام
+              OFFSET=$((UPDATE_ID + 1))
+            done
+
+            # اگر آفست جدیدی از حلقه داخلی داریم، اعمال کن
+            if [ -n "$OFFSET" ]; then
+              # فقط کافیه offset آخرین پیام رو تنظیم کنیم
+              : # این کار توی حلقه انجام شده
+            fi
+
+            sleep 10  # هر ۱۰ ثانیه چک کن
+          done
+
+          echo "😴 ربات به حالت خواب فرو رفت. برای بیدار شدن دوباره workflow را اجرا کنید."
