@@ -1,0 +1,31 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.gate_app">
+
+    <!-- دسترسی اینترنت -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <!-- اجازه VPN -->
+    <uses-permission android:name="android.permission.BIND_VPN_SERVICE"/>
+
+    <application
+        android:label="Gate"
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
+        
+        <activity
+            android:name=".MainActivity"
+            ...>
+            ...
+        </activity>
+
+        <!-- سرویس VPN -->
+        <service
+            android:name=".GateVpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.net.VpnService"/>
+            </intent-filter>
+        </service>
+    </application>
+</manifest>
