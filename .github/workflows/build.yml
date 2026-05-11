@@ -1,7 +1,7 @@
 name: Build APK
 
 on:
-  workflow_dispatch: # فقط دستی اجرا بشه
+  workflow_dispatch:
 
 jobs:
   build:
@@ -14,6 +14,9 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+
+      - name: 2.5. ایجاد پوشه‌های ضروری (android و...)
+        run: flutter create --platforms android .
 
       - name: 3. دریافت کتابخونه‌های مورد نیاز
         run: flutter pub get
