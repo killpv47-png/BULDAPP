@@ -1,5 +1,5 @@
 name: gate_app
-description: Gate - دسترسی آزاد با جیمیل
+description: Gate - دسترسی آزاد با تونل گوگل
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -9,9 +9,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  google_sign_in: ^6.2.1
-  webview_flutter: ^4.8.0
+  flutter_inappwebview: ^6.0.0
   http: ^1.2.1
+  shared_preferences: ^2.2.2
 
 dev_dependencies:
   flutter_test:
