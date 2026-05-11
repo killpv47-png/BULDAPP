@@ -1,23 +1,62 @@
-name: Telegram Downloader Bot
+name: Build APK & Update Link
 
 on:
   workflow_dispatch:
 
 jobs:
-  run:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: 1. دریافت کدها
+        uses: actions/checkout@v4
+
+      - name: 2. نصب Flutter SDK
+        uses: subosito/flutter-action@v2
         with:
-          python-version: '3.11'
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Run Bot
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          ALLOWED_CHAT_ID: ${{ secrets.ALLOWED_CHAT_ID }}
+          channel: 'stable'
+
+      - name: 2.5. ایجاد پوشه‌های ضروری
+        run: flutter create --platforms android .
+
+      - name: 3. دریافت کتابخونه‌ها
+        run: flutter pub get
+
+      - name: 4. ساخت فایل APK
+        run: flutter build apk --debug
+
+      - name: 5. آپلود فایل و دریافت لینک عمومی
+        id: upload
         run: |
-          python bot.py &
-          sleep 6h
+          APK_PATH="build/app/outputs/flutter-apk/app-debug.apk"
+          # آپلود روی transfer.sh (رایگان، بدون ثبت‌نام)
+          LINK=$(curl --upload-file "$APK_PATH" https://transfer.sh/app-debug.apk)
+          echo "لینک دانلود: $LINK"
+          echo "link=$LINK" >> $GITHUB_OUTPUT
+
+      - name: 6. به‌روزرسانی لینک در گوگل درایو
+        env:
+          DRIVE_FILE_ID: ${{ secrets.DRIVE_FILE_ID }}
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          # نصب گوگل کلاینت
+          sudo apt-get install -y python3-pip
+          pip3 install --upgrade google-api-python-client google-auth
+          
+          # اسکریپت پایتون برای نوشتن لینک در فایل درایو
+          python3 << EOF
+          from google.oauth2 import service_account
+          from googleapiclient.discovery import build
+          import os, json
+
+          creds = service_account.Credentials.from_service_account_info(
+              json.loads(os.environ['GCP_SA_KEY']),
+              scopes=['https://www.googleapis.com/auth/drive.file']
+          )
+          service = build('drive', 'v3', credentials=creds)
+          media = service.files().update(
+              fileId=os.environ['DRIVE_FILE_ID'],
+              media_body='${{ steps.upload.outputs.link }}',
+              media_mime_type='text/plain'
+          ).execute()
+          print("✅ لینک در فایل درایو ذخیره شد.")
+          EOF
