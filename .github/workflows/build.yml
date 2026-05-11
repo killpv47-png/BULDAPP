@@ -1,36 +1,23 @@
-name: Build APK
+name: Telegram Downloader Bot
 
 on:
   workflow_dispatch:
 
 jobs:
-  build:
+  run:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. دریافت کدها
-        uses: actions/checkout@v4
-
-      - name: 2. نصب Flutter SDK
-        uses: subosito/flutter-action@v2
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          channel: 'stable'
-
-      - name: 2.5. ایجاد پوشه‌های ضروری (android و...)
-        run: flutter create --platforms android .
-
-      - name: 3. دریافت کتابخونه‌های مورد نیاز
-        run: flutter pub get
-
-      - name: 4. ساخت فایل نصبی (APK)
-        run: flutter build apk --debug
-
-      - name: 5. ارسال فایل APK به ربات تلگرام
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run Bot
         env:
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          ALLOWED_CHAT_ID: ${{ secrets.ALLOWED_CHAT_ID }}
         run: |
-          APK_PATH="build/app/outputs/flutter-apk/app-debug.apk"
-          echo "📤 در حال ارسال فایل به تلگرام..."
-          curl -F "document=@${APK_PATH}" -F "chat_id=${CHAT_ID}" \
-               "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
-          echo "✅ فایل با موفقیت ارسال شد."
+          python bot.py &
+          sleep 6h
