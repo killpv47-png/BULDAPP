@@ -3,7 +3,10 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'proxy.dart';
 
-void main() => runApp(const GateApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized(); // 确保 Flutter 环境初始化
+  runApp(const GateApp());
+}
 
 class GateApp extends StatelessWidget {
   const GateApp({super.key});
@@ -18,9 +21,8 @@ class GateApp extends StatelessWidget {
           seedColor: Colors.lightBlue.shade200,
           brightness: Brightness.light,
         ),
-        scaffoldBackgroundColor: const Color(0xFFE3F2FD), // آبی کمرنگ
+        scaffoldBackgroundColor: const Color(0xFFE3F2FD),
         useMaterial3: true,
-        fontFamily: 'Roboto',
       ),
       home: const GateHome(),
     );
@@ -60,29 +62,48 @@ class _GateHomeState extends State<GateHome> {
   Future<void> _startProxy(String scriptUrl) async {
     _proxy?.stop();
     _proxy = GoogleScriptProxy(scriptUrl);
-    final port = await _proxy!.start();
-    if (_webController != null && _googleMode) {
-      await _webController!.setSettings(proxySettings: ProxySettings(
-        proxyAddress: '127.0.0.1',
-        proxyPort: port,
-        type: ProxyType.HTTP,
-      ));
-    }
+    await _proxy!.start();
+    _applyProxySettings();
   }
 
   Future<void> _toggleGoogleMode(bool value) async {
     setState(() => _googleMode = value);
-    if (value && _proxy != null) {
-      await _webController?.setSettings(proxySettings: ProxySettings(
-        proxyAddress: '127.0.0.1',
-        proxyPort: _proxy!.port!,
-        type: ProxyType.HTTP,
-      ));
-    } else {
-      await _webController?.setSettings(proxySettings: null);
-    }
+    _applyProxySettings();
     _reloadCurrentUrl();
   }
+
+  // ----- 这里是用官方方法设置代理的地方 -----
+  Future<void> _applyProxySettings() async {
+    if (!mounted) return;
+
+    // 检查平台是否支持该功能
+    bool proxyAvailable = await WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE);
+    if (!proxyAvailable) {
+      if(mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('当前设备不支持代理设置')),
+        );
+      }
+      return;
+    }
+
+    ProxyController proxyController = ProxyController.instance();
+    
+    if (_googleMode && _proxy != null) {
+      // 启用代理：将所有流量定向到我们的本地代理服务器
+      await proxyController.setProxyOverride(
+        settings: ProxySettings(
+          proxyRules: [
+            ProxyRule(url: "127.0.0.1:${_proxy!.port}"),
+          ],
+        ),
+      );
+    } else {
+      // 禁用代理：清除覆盖，使用系统默认设置
+      await proxyController.clearProxyOverride();
+    }
+  }
+  // ----- 修改结束 -----
 
   void _reloadCurrentUrl() {
     if (_currentUrl.isNotEmpty && _webController != null) {
@@ -105,9 +126,11 @@ class _GateHomeState extends State<GateHome> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('script_url', url);
     await _startProxy(url);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('اسکریپت ذخیره و پروکسی فعال شد')),
-    );
+    if(mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('اسکریپت ذخیره و پروکسی فعال شد')),
+      );
+    }
   }
 
   @override
@@ -123,6 +146,7 @@ class _GateHomeState extends State<GateHome> {
           ),
         ),
         actions: [
+          // Google Mode 开关
           Switch(
             value: _googleMode,
             onChanged: _toggleGoogleMode,
@@ -165,13 +189,7 @@ class _GateHomeState extends State<GateHome> {
               initialUrlRequest: URLRequest(url: WebUri('about:blank')),
               onWebViewCreated: (controller) {
                 _webController = controller;
-                if (_proxy != null && _googleMode) {
-                  controller.setSettings(proxySettings: ProxySettings(
-                    proxyAddress: '127.0.0.1',
-                    proxyPort: _proxy!.port!,
-                    type: ProxyType.HTTP,
-                  ));
-                }
+                _applyProxySettings();
               },
               onLoadStart: (controller, url) {
                 setState(() => _currentUrl = url.toString());
@@ -202,11 +220,11 @@ class _GateHomeState extends State<GateHome> {
   }
 }
 
-// نقاشی پرچم هخامنشی (درفش کاویانی)
+// 波斯帝国旗标绘制器（保持不变）
 class KavianiPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final bgPaint = Paint()..color = const Color(0xFFC62828); // قرمز تیره
+    final bgPaint = Paint()..color = const Color(0xFFC62828);
     canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), bgPaint);
     final goldPaint = Paint()..color = Colors.amber.shade700;
     canvas.drawRect(Rect.fromLTWH(size.width * 0.4, 0, size.width * 0.2, size.height), goldPaint);
