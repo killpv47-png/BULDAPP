@@ -1,89 +1,968 @@
-name: Build APK (Split) & Telegram Wake
+name: Build Killout Meteor Addon
 
 on:
+  push:
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
-  build:
+  generate-and-build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: 1. دریافت کدها
-        uses: actions/checkout@v4
+    # ۱. کلون کردن ریپازیتوری
+    - name: Checkout Repository
+      uses: actions/checkout@v4
 
-      - name: 2. نصب Flutter SDK
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
+    # ۲. تزریق ساختار پروژه و کدهای جاوا
+    - name: Inject Addon Source Code
+      run: |
+        mkdir -p src/main/java/com/dadash/killout/modules
+        mkdir -p src/main/resources
 
-      - name: 2.5. بازسازی پوشه android با Gradle صحیح
-        run: |
-          flutter create --platforms android .
-          # حالا فایل‌های سفارشی را جایگزین می‌کنیم
-          # (محتویات این فایل‌ها را در ادامه می‌نویسیم)
+        # ساخت فایل تنظیمات گریدل
+        cat << 'EOF' > settings.gradle
+        pluginManagement {
+            repositories {
+                maven { url "https://maven.fabricmc.net/" }
+                mavenCentral()
+            }
+        }
+        rootProject.name = 'killout'
+        EOF
 
-      - name: 3. دریافت کتابخونه‌های مورد نیاز
-        run: flutter pub get
+        # کانفیگ بیلد گریدل
+        cat << 'EOF' > build.gradle
+        plugins {
+            id 'fabric-loom' version '1.7-SNAPSHOT'
+            id 'maven-publish'
+        }
+        version = '1.0.0'
+        group = 'com.dadash.killout'
+        repositories {
+            mavenCentral()
+            maven { url "https://maven.fabricmc.net/" }
+            maven { url "https://maven.meteordev.org/releases" }
+            maven { url "https://maven.meteordev.org/snapshots" }
+        }
+        dependencies {
+            minecraft "com.mojang:minecraft:1.21.1"
+            mappings "net.fabricmc:yarn:1.21.1+build.2:v2"
+            modImplementation "net.fabricmc:fabric-loader:0.15.11"
+            modImplementation "net.fabricmc.fabric-api:fabric-api:0.102.0+1.21.1"
+            
+            // دپندسی میتیور کلاینت
+            modImplementation "meteordevelopment:meteor-client:0.5.8-SNAPSHOT"
+        }
+        tasks.withType(JavaCompile).configureEach {
+            it.options.release = 21
+        }
+        EOF
 
-      - name: 4. ساخت فایل‌های نصبی (تقسیم شده بر اساس ABI)
-        run: flutter build apk --split-per-abi
+        # فایل متا دیتا فابریک - نقطه ورود با کلید قطعی "meteor"
+        cat << 'EOF' > src/main/resources/fabric.mod.json
+        {
+          "schemaVersion": 1,
+          "id": "killout",
+          "version": "1.0.0",
+          "name": "Killout Addon",
+          "description": "Premium mid-air crystal pvp utilities and dupe modules.",
+          "authors": [ "Dadash" ],
+          "environment": "client",
+          "entrypoints": {
+            "meteor": [
+              "com.dadash.killout.KilloutAddon"
+            ]
+          },
+          "depends": {
+            "fabricloader": ">=0.15.11",
+            "minecraft": "~1.21.1",
+            "meteor-client": "*"
+          }
+        }
+        EOF
 
-      - name: 5. ارسال هر سه نسخه APK به تلگرام
-        env:
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          BASE_DIR="build/app/outputs/flutter-apk"
-          for apk in "$BASE_DIR"/app-*-release.apk; do
-            echo "📤 ارسال فایل $(basename "$apk") ..."
-            curl -s -F "document=@${apk}" \
-                 -F "chat_id=${CHAT_ID}" \
-                 "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
-            sleep 2
-          done
-          echo "✅ تمام فایل‌ها ارسال شدند."
+        # کلاس اصلی ادون Killout - ثبت هر ۸ ماژول قدرتمند در کلاینت (به همراه KitDupe)
+        cat << 'EOF' > src/main/java/com/dadash/killout/KilloutAddon.java
+        package com.dadash.killout;
 
-      - name: 6. ۱۰ دقیقه بیداری برای پاسخ به /start
-        env:
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        run: |
-          python3 - << ENDPYTHON
-          import requests, time, os, glob
+        import com.dadash.killout.modules.KillPv2;
+        import com.dadash.killout.modules.FPSBoost;
+        import com.dadash.killout.modules.ESPBoost;
+        import com.dadash.killout.modules.AutoWebPlus;
+        import com.dadash.killout.modules.StorageLooter;
+        import com.dadash.killout.modules.PremiumCrystalAura;
+        import com.dadash.killout.modules.CetiMine;
+        import com.dadash.killout.modules.KitDupe;
+        import meteordevelopment.meteorclient.addons.MeteorAddon;
+        import meteordevelopment.meteorclient.systems.modules.Category;
+        import meteordevelopment.meteorclient.systems.modules.Modules;
+        import net.minecraft.item.Items;
+        import org.slf4j.Logger;
+        import org.slf4j.LoggerFactory;
 
-          BOT_TOKEN = os.environ['BOT_TOKEN']
-          BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-          APK_FILES = glob.glob("build/app/outputs/flutter-apk/app-*-release.apk")
-          
-          def send_all_apks(chat_id):
-              for apk_path in APK_FILES:
-                  with open(apk_path, 'rb') as f:
-                      requests.post(f"{BASE_URL}/sendDocument",
-                                    data={'chat_id': chat_id},
-                                    files={'document': f})
-                  time.sleep(1)
+        public class KilloutAddon extends MeteorAddon {
+            public static final Logger LOG = LoggerFactory.getLogger("Killout");
+            public static final Category CATEGORY = new Category("Killout", Items.END_CRYSTAL.getDefaultStack());
 
-          END_TIME = time.time() + 600
-          last_update_id = -1
+            @Override
+            public void onInitialize() {
+                LOG.info("Loading Killout Addon by Dadash...");
+                Modules.get().add(new KillPv2());
+                Modules.get().add(new FPSBoost());
+                Modules.get().add(new ESPBoost());
+                Modules.get().add(new AutoWebPlus());
+                Modules.get().add(new StorageLooter());
+                Modules.get().add(new PremiumCrystalAura());
+                Modules.get().add(new CetiMine());
+                Modules.get().add(new KitDupe());
+            }
 
-          print("⏰ ربات برای ۱۰ دقیقه بیدار ماند و به /start پاسخ می‌دهد...")
-          while time.time() < END_TIME:
-              url = f"{BASE_URL}/getUpdates?timeout=5&offset={last_update_id + 1}"
-              try:
-                  updates = requests.get(url).json()
-              except Exception as e:
-                  print("⚠️ خطا در دریافت به‌روزرسانی:", e)
-                  time.sleep(2)
-                  continue
+            @Override
+            public void onRegisterCategories() {
+                Modules.registerCategory(CATEGORY);
+            }
 
-              if updates.get('result'):
-                  for upd in updates['result']:
-                      last_update_id = upd['update_id']
-                      msg = upd.get('message')
-                      if msg and msg.get('text') == '/start':
-                          chat_id = str(msg['chat']['id'])
-                          print(f"🔔 دریافت /start از {chat_id}")
-                          send_all_apks(chat_id)
+            @Override
+            public String getPackage() {
+                return "com.dadash.killout";
+            }
+        }
+        EOF
 
-              time.sleep(3)
+        # کد ماژول اول: kill_pv2 (کاشتن جفت‌بلاک ابسیدین زیر پای پلیر معلق)
+        cat << 'EOF' > src/main/java/com/dadash/killout/modules/KillPv2.java
+        package com.dadash.killout.modules;
 
-          print("😴 ۱۰ دقیقه تمام شد. ربات به خواب رفت.")
-          ENDPYTHON
+        import com.dadash.killout.KilloutAddon;
+        import meteordevelopment.meteorclient.events.world.TickEvent;
+        import meteordevelopment.meteorclient.settings.*;
+        import meteordevelopment.meteorclient.systems.modules.Module;
+        import meteordevelopment.meteorclient.utils.entity.SortPriority;
+        import meteordevelopment.meteorclient.utils.entity.TargetUtils;
+        import meteordevelopment.meteorclient.utils.player.FindItemResult;
+        import meteordevelopment.meteorclient.utils.player.InvUtils;
+        import meteordevelopment.meteorclient.utils.player.ChatUtils;
+        import meteordevelopment.meteorclient.utils.world.BlockUtils;
+        import meteordevelopment.orbit.EventHandler;
+        import net.minecraft.entity.player.PlayerEntity;
+        import net.minecraft.item.Items;
+        import net.minecraft.util.math.BlockPos;
+
+        public class KillPv2 extends Module {
+            private final SettingGroup sgGeneral = settings.getDefaultGroup();
+
+            private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder()
+                .name("range")
+                .description("فاصله مجاز برای زیر نظر گرفتن حریف")
+                .defaultValue(5.0)
+                .min(1.0)
+                .max(7.0)
+                .build()
+            );
+
+            public KillPv2() {
+                super(KilloutAddon.CATEGORY, "kill_pv2", "کاشتن ابسیدین خودکار زیر پا و کنار پلیرهای معلق برای قرار دادن کریستال");
+            }
+
+            @EventHandler
+            private void onTick(TickEvent.Post event) {
+                if (mc.world == null || mc.player == null) return;
+
+                PlayerEntity target = TargetUtils.getPlayerTarget(range.get(), SortPriority.LowestDistance);
+                if (target == null) return;
+
+                if (!target.isOnGround()) {
+                    BlockPos blockUnderTarget = target.getBlockPos().down();
+                    BlockPos blockNextToTarget = blockUnderTarget.east();
+
+                    FindItemResult obsidian = InvUtils.findInHotbar(Items.OBSIDIAN);
+                    if (!obsidian.isHotbar()) {
+                        obsidian = InvUtils.find(Items.OBSIDIAN);
+                    }
+
+                    if (obsidian.found()) {
+                        boolean placedMain = false;
+                        boolean placedSide = false;
+
+                        if (mc.world.getBlockState(blockUnderTarget).isAir()) {
+                            placedMain = BlockUtils.place(blockUnderTarget, obsidian, true, 50, true, false);
+                        }
+
+                        if (mc.world.getBlockState(blockNextToTarget).isAir()) {
+                            placedSide = BlockUtils.place(blockNextToTarget, obsidian, true, 50, true, false);
+                        }
+
+                        if (placedMain || placedSide) {
+                            ChatUtils.sendMsg(6247, net.minecraft.util.Formatting.GRAY, "§c[kill_pv2] §aپلتفرم ابسیدین برای فایت کریستال روی §e" + target.getGameProfile().getName() + " §aآماده شد!");
+                        }
+                    }
+                }
+            }
+        }
+        EOF
+
+        # کد ماژول دوم: FPSBoost ارتقایافته (بهینه‌سازی همه چی به جز ذرات)
+        cat << 'EOF' > src/main/java/com/dadash/killout/modules/FPSBoost.java
+        package com.dadash.killout.modules;
+
+        import com.dadash.killout.KilloutAddon;
+        import meteordevelopment.meteorclient.events.world.TickEvent;
+        import meteordevelopment.meteorclient.settings.*;
+        import meteordevelopment.meteorclient.systems.modules.Module;
+        import meteordevelopment.meteorclient.systems.modules.Modules;
+        import meteordevelopment.meteorclient.utils.player.ChatUtils;
+        import meteordevelopment.orbit.EventHandler;
+        import net.minecraft.client.option.GraphicsMode;
+        import net.minecraft.client.option.CloudRenderMode;
+
+        public class FPSBoost extends Module {
+            private final SettingGroup sgGeneral = settings.getDefaultGroup();
+
+            private final Setting<Boolean> fullOptimize = sgGeneral.add(new BoolSetting.Builder()
+                .name("ultra-boost")
+                .description("بهینه‌سازی کامل گرافیک، چانک‌ها و لایتینگ بازی زمان فایت بدون دستکاری ذرات")
+                .defaultValue(true)
+                .build()
+            );
+
+            private GraphicsMode originalGraphics = GraphicsMode.FANCY;
+            private CloudRenderMode originalClouds = CloudRenderMode.FANCY;
+            private boolean originalShadows = true;
+            private boolean optimized = false;
+
+            public FPSBoost() {
+                super(KilloutAddon.CATEGORY, "fps_boost", "کاهش بار گرافیکی، سایه‌ها و رندرینگ بازی جهت دریافت بالاترین فریم بدون افت کیفیت ذرات");
+            }
+
+            @Override
+            public void onActivate() {
+                if (mc.options != null) {
+                    originalGraphics = mc.options.getGraphicsMode().getValue();
+                    originalClouds = mc.options.getCloudRenderMode().getValue();
+                    originalShadows = mc.options.getEntityShadows().getValue();
+                }
+            }
+
+            @Override
+            public void onDeactivate() {
+                if (mc.options != null && optimized) {
+                    mc.options.getGraphicsMode().setValue(originalGraphics);
+                    mc.options.getCloudRenderMode().setValue(originalClouds);
+                    mc.options.getEntityShadows().setValue(originalShadows);
+                    optimized = false;
+                }
+            }
+
+            @EventHandler
+            private void onTick(TickEvent.Post event) {
+                if (mc.options == null || mc.world == null) return;
+
+                boolean combatActive = false;
+                Module crystalAura = Modules.get().get("crystal-aura");
+                Module killAura = Modules.get().get("kill-aura");
+                Module killPv2 = Modules.get().get("kill_pv2");
+
+                if ((crystalAura != null && crystalAura.isActive()) || 
+                    (killAura != null && killAura.isActive()) || 
+                    (killPv2 != null && killPv2.isActive())) {
+                    combatActive = true;
+                }
+
+                if (fullOptimize.get() && combatActive) {
+                    if (!optimized) {
+                        mc.options.getGraphicsMode().setValue(GraphicsMode.FAST);
+                        mc.options.getCloudRenderMode().setValue(CloudRenderMode.OFF);
+                        mc.options.getEntityShadows().setValue(false);
+                        ChatUtils.sendMsg(7382, net.minecraft.util.Formatting.GREEN, "§c[FPSBoost] §eتنظیمات رندرینگ به حالت فست تغییر یافت! (ذرات دست‌نخورده ماندند)");
+                        optimized = true;
+                    }
+                } else if (optimized && !combatActive) {
+                    mc.options.getGraphicsMode().setValue(originalGraphics);
+                    mc.options.getCloudRenderMode().setValue(originalClouds);
+                    mc.options.getEntityShadows().setValue(originalShadows);
+                    ChatUtils.sendMsg(7382, net.minecraft.util.Formatting.GRAY, "§c[FPSBoost] §aوضعیت فایت عادی؛ تنظیمات رندرینگ بازگردانی شدند.");
+                    optimized = false;
+                }
+            }
+        }
+        EOF
+
+        # کد ماژول سوم: ESPBoost ارتقایافته (حاوی کلید سوئیچ خطوط و سایه دیواره‌ها)
+        cat << 'EOF' > src/main/java/com/dadash/killout/modules/ESPBoost.java
+        package com.dadash.killout.modules;
+
+        import com.dadash.killout.KilloutAddon;
+        import meteordevelopment.meteorclient.events.render.Render3DEvent;
+        import meteordevelopment.meteorclient.renderer.ShapeMode;
+        import meteordevelopment.meteorclient.settings.*;
+        import meteordevelopment.meteorclient.systems.modules.Module;
+        import meteordevelopment.meteorclient.utils.render.color.SettingColor;
+        import meteordevelopment.orbit.EventHandler;
+        import net.minecraft.entity.Entity;
+        import net.minecraft.entity.player.PlayerEntity;
+        import net.minecraft.entity.mob.HostileEntity;
+        import net.minecraft.entity.passive.AnimalEntity;
+        import net.minecraft.util.math.Box;
+
+        public class ESPBoost extends Module {
+            private final SettingGroup sgGeneral = settings.getDefaultGroup();
+
+            private final Setting<Boolean> renderLines = sgGeneral.add(new BoolSetting.Builder()
+                .name("render-lines")
+                .description("کشیدن خطوط دور باکس ماب‌ها")
+                .defaultValue(true)
+                .build()
+            );
+
+            private final Setting<SettingColor> lineColor = sgGeneral.add(new ColorSetting.Builder()
+                .name("line-color")
+                .description("رنگ خطوط رندر دور تارجت‌ها")
+                .defaultValue(new SettingColor(255, 0, 0, 255))
+                .build()
+            );
+
+            private final Setting<Boolean> renderSides = sgGeneral.add(new BoolSetting.Builder()
+                .name("render-sides")
+                .description("رندر کردن دیواره‌های داخلی باکس (حالت فیل شیدر شفاف)")
+                .defaultValue(false)
+                .build()
+            );
+
+            private final Setting<SettingColor> sideColor = sgGeneral.add(new ColorSetting.Builder()
+                .name("side-color")
+                .description("رنگ دیواره‌های داخلی")
+                .defaultValue(new SettingColor(255, 0, 0, 50))
+                .build()
+            );
+
+            private final Setting<Boolean> players = sgGeneral.add(new BoolSetting.Builder()
+                .name("players")
+                .description("رندر خطوط دور پلیرها")
+                .defaultValue(true)
+                .build()
+            );
+
+            private final Setting<Boolean> monsters = sgGeneral.add(new BoolSetting.Builder()
+                .name("monsters")
+                .description("رندر خطوط دور ماب‌های وحشی")
+                .defaultValue(false)
+                .build()
+            );
+
+            private final Setting<Boolean> animals = sgGeneral.add(new BoolSetting.Builder()
+                .name("animals")
+                .description("رندر خطوط دور حیوانات نقشه")
+                .defaultValue(false)
+                .build()
+            );
+
+            public ESPBoost() {
+                super(KilloutAddon.CATEGORY, "esp_boost", "ای‌اس‌پی خطی فوق‌العاده سبک مشابه ورسط کلاینت با قابلیت شخصی‌سازی کامل خطوط و شیدر");
+            }
+
+            @EventHandler
+            private void onRender3D(Render3DEvent event) {
+                if (mc.world == null || mc.player == null) return;
+
+                ShapeMode mode = null;
+                if (renderLines.get() && renderSides.get()) mode = ShapeMode.Both;
+                else if (renderLines.get()) mode = ShapeMode.Lines;
+                else if (renderSides.get()) mode = ShapeMode.Sides;
+
+                if (mode == null) return;
+
+                for (Entity entity : mc.world.getEntities()) {
+                    if (entity == mc.player) continue;
+
+                    boolean shouldRender = false;
+                    if (entity instanceof PlayerEntity && players.get()) shouldRender = true;
+                    else if (entity instanceof HostileEntity && monsters.get()) shouldRender = true;
+                    else if (entity instanceof AnimalEntity && animals.get()) shouldRender = true;
+
+                    if (shouldRender) {
+                        double x = entity.prevX + (entity.getX() - entity.prevX) * event.tickDelta;
+                        double y = entity.prevY + (entity.getY() - entity.prevY) * event.tickDelta;
+                        double z = entity.prevZ + (entity.getZ() - entity.prevZ) * event.tickDelta;
+                        
+                        double halfWidth = entity.getWidth() / 2.0;
+                        double height = entity.getHeight();
+                        
+                        Box box = new Box(x - halfWidth, y, z - halfWidth, x + halfWidth, y + height, z + halfWidth);
+                        
+                        event.renderer.box(box, sideColor.get(), lineColor.get(), mode, 0);
+                    }
+                }
+            }
+        }
+        EOF
+
+        # کد ماژول چهارم: ماژول کاملاً جدید +AutoWeb جهت قفل کردن حریف در تار عنکبوت
+        cat << 'EOF' > src/main/java/com/dadash/killout/modules/AutoWebPlus.java
+        package com.dadash.killout.modules;
+
+        import com.dadash.killout.KilloutAddon;
+        import meteordevelopment.meteorclient.events.world.TickEvent;
+        import meteordevelopment.meteorclient.settings.*;
+        import meteordevelopment.meteorclient.systems.modules.Module;
+        import meteordevelopment.meteorclient.utils.entity.SortPriority;
+        import meteordevelopment.meteorclient.utils.entity.TargetUtils;
+        import meteordevelopment.meteorclient.utils.player.FindItemResult;
+        import meteordevelopment.meteorclient.utils.player.InvUtils;
+        import meteordevelopment.meteorclient.utils.world.BlockUtils;
+        import meteordevelopment.orbit.EventHandler;
+        import net.minecraft.entity.player.PlayerEntity;
+        import net.minecraft.item.Items;
+        import net.minecraft.util.math.BlockPos;
+
+        public class AutoWebPlus extends Module {
+            private final SettingGroup sgGeneral = settings.getDefaultGroup();
+
+            private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder()
+                .name("range")
+                .description("رنج شناسایی و هدف‌گیری نزدیک‌ترین پلیر")
+                .defaultValue(5.0)
+                .min(1.0)
+                .max(7.0)
+                .build()
+            );
+
+            private final Setting<Integer> radius = sgGeneral.add(new IntSetting.Builder()
+                .name("radius")
+                .description("شعاع پر کردن تار عنکبوت دور تا دور پلیر هدف")
+                .defaultValue(1)
+                .min(0)
+                .max(3)
+                .sliderMax(3)
+                .build()
+            );
+
+            private final Setting<Integer> height = sgGeneral.add(new IntSetting.Builder()
+                .name("height")
+                .description("ارتفاع چیدمان تار عنکبوت از پای پلیر به سمت بالا")
+                .defaultValue(1)
+                .min(1)
+                .max(4)
+                .sliderMax(4)
+                .build()
+            );
+
+            private final Setting<Integer> delay = sgGeneral.add(new IntSetting.Builder()
+                .name("delay")
+                .description("تاخیر زمان‌بندی بین هر بار ران شدن عملیات کاشت تار (بر حسب تیک)")
+                .defaultValue(0)
+                .min(0)
+                .max(20)
+                .build()
+            );
+
+            private final Setting<Integer> blocksPerTick = sgGeneral.add(new IntSetting.Builder()
+                .name("blocks-per-tick")
+                .description("حداکثر تعداد تاری که مجاز است در یک تیک برای جلوگیری از لَگ سرور کاشته شود")
+                .defaultValue(4)
+                .min(1)
+                .max(10)
+                .build()
+            );
+
+            private int ticksPassed = 0;
+
+            public AutoWebPlus() {
+                super(KilloutAddon.CATEGORY, "autoweb+", "کاشتن کاملاً خودکار و هوشمند تار عنکبوت دور و زیر پای حریف با مدیریت ابعاد و بهینه‌سازی ریسورس");
+            }
+
+            @EventHandler
+            private void onTick(TickEvent.Post event) {
+                if (mc.world == null || mc.player == null) return;
+
+                // مدیریت تاخیر و سرعت کلاک ماژول
+                if (ticksPassed > 0) {
+                    ticksPassed--;
+                    return;
+                }
+
+                PlayerEntity target = TargetUtils.getPlayerTarget(range.get(), SortPriority.LowestDistance);
+                if (target == null) return;
+
+                // پیدا کردن تار عنکبوت در هات‌بار یا اینونتوری
+                FindItemResult web = InvUtils.findInHotbar(Items.COBWEB);
+                if (!web.isHotbar()) {
+                    web = InvUtils.find(Items.COBWEB);
+                }
+
+                if (!web.found()) return;
+
+                BlockPos targetPos = target.getBlockPos();
+                int r = radius.get();
+                int h = height.get();
+                int maxBlocks = blocksPerTick.get();
+                int placedCount = 0;
+
+                // حلقه سه‌بعدی برای پوشش کامل محیط حریف بر اساس تنظیمات شخصی تو
+                for (int y = 0; y < h; y++) {
+                    for (int x = -r; x <= r; x++) {
+                        for (int z = -r; z <= r; z++) {
+                            if (placedCount >= maxBlocks) break;
+
+                            BlockPos currentPos = targetPos.add(x, y, z);
+                            
+                            // بررسی خالی بودن فضا جهت پوزیشن درست بلاک
+                            if (mc.world.getBlockState(currentPos).isAir()) {
+                                if (BlockUtils.place(currentPos, web, true, 50, true, false)) {
+                                    placedCount++;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // اعمال تیک استراحت در صورت موفقیت کاشت بلاک
+                if (placedCount > 0) {
+                    ticksPassed = delay.get();
+                }
+            }
+        }
+        EOF
+
+        # کد ماژول پنجم: StorageLooter (نسخه فیکس شده با پشتیبانی از DrawContext ماینکرافت 1.21.1)
+        cat << 'EOF' > src/main/java/com/dadash/killout/modules/StorageLooter.java
+        package com.dadash.killout.modules;
+
+        import com.dadash.killout.KilloutAddon;
+        import meteordevelopment.meteorclient.events.world.TickEvent;
+        import meteordevelopment.meteorclient.events.render.Render2DEvent;
+        import meteordevelopment.meteorclient.settings.*;
+        import meteordevelopment.meteorclient.systems.modules.Module;
+        import meteordevelopment.meteorclient.utils.player.ChatUtils;
+        import meteordevelopment.meteorclient.utils.misc.Keybind;
+        import meteordevelopment.orbit.EventHandler;
+        import net.minecraft.client.gui.screen.ingame.HandledScreen;
+        import net.minecraft.screen.ScreenHandler;
+        import net.minecraft.screen.slot.SlotActionType;
+        import net.minecraft.item.Item;
+        import net.minecraft.item.ItemStack;
+        import org.lwjgl.glfw.GLFW;
+
+        import java.util.ArrayList;
+        import java.util.List;
+
+        public class StorageLooter extends Module {
+            private final SettingGroup sgGeneral = settings.getDefaultGroup();
+
+            private final Setting<List<Item>> lootFilter = sgGeneral.add(new ItemListSetting.Builder()
+                .name("loot-filter")
+                .description("انتخاب آیتم‌هایی که می‌خواهی به صورت فیلتر شده برداشته شوند")
+                .defaultValue(new ArrayList<>())
+                .build()
+            );
+
+            private final Setting<Keybind> lootAllKey = sgGeneral.add(new KeybindSetting.Builder()
+                .name("loot-all-hotkey")
+                .description("کلید میانبر برای خالی کردن کل مخزن به صورت آنی")
+                .defaultValue(Keybind.fromKey(GLFW.GLFW_KEY_V))
+                .build()
+            );
+
+            private final Setting<Keybind> lootFilteredKey = sgGeneral.add(new KeybindSetting.Builder()
+                .name("loot-filtered-hotkey")
+                .description("کلید میانبر برای لوت کردن اختصاصی آیتم‌های فیلتر شده")
+                .defaultValue(Keybind.fromKey(GLFW.GLFW_KEY_B))
+                .build()
+            );
+
+            private final Setting<Integer> actionDelay = sgGeneral.add(new IntSetting.Builder()
+                .name("packet-delay")
+                .description("تاخیر بین جا‌به‌جایی هر اسلات (تیک)")
+                .defaultValue(0)
+                .min(0)
+                .max(5)
+                .build()
+            );
+
+            private int delayTimer = 0;
+
+            public StorageLooter() {
+                super(KilloutAddon.CATEGORY, "storage_looter", "لوت سریع و آنی تمام یا بخشی از محتویات صندوق‌ها با کلیدهای میانبر بهینه‌شده برای پوجاو");
+            }
+
+            @EventHandler
+            private void onTick(TickEvent.Post event) {
+                if (mc.player == null || mc.currentScreen == null) return;
+
+                if (mc.currentScreen instanceof HandledScreen) {
+                    ScreenHandler handler = mc.player.currentScreenHandler;
+                    if (handler == null) return;
+
+                    int containerSize = handler.slots.size() - 36;
+                    if (containerSize <= 0) return;
+
+                    if (delayTimer > 0) {
+                        delayTimer--;
+                        return;
+                    }
+
+                    // بررسی فشرده شدن کلید لوت همه چیز
+                    if (lootAllKey.get().isPressed()) {
+                        executeLoot(handler, containerSize, false);
+                    }
+                    // بررسی فشرده شدن کلید لوت فیلتر شده
+                    else if (lootFilteredKey.get().isPressed()) {
+                        executeLoot(handler, containerSize, true);
+                    }
+                }
+            }
+
+            @EventHandler
+            private void onRender2D(Render2DEvent event) {
+                if (mc.currentScreen instanceof HandledScreen && mc.textRenderer != null) {
+                    // رندر متنی کاملا ایمن و منطبق بر DrawContext ماینکرافت 1.21.1 برای پوجاو
+                    String text = "👉 Hotkeys: [V] Loot All | [B] Loot Filtered 👈";
+                    int width = mc.getWindow().getScaledWidth();
+                    int textWidth = mc.textRenderer.getWidth(text);
+                    int x = (width - textWidth) / 2;
+                    
+                    // استفاده مستقیم از آبجکت لوکال رندرینگ برای رفع کامل ارور گیت‌هاب
+                    event.drawContext.drawText(mc.textRenderer, text, x, 8, 0xFFFFFF00, true);
+                }
+            }
+
+            private void executeLoot(ScreenHandler handler, int containerSize, boolean useFilter) {
+                int itemsLooted = 0;
+                for (int i = 0; i < containerSize; i++) {
+                    if (!handler.getSlot(i).hasStack()) continue;
+
+                    ItemStack itemStack = handler.getSlot(i).getStack();
+                    if (useFilter && !lootFilter.get().contains(itemStack.getItem())) {
+                        continue;
+                    }
+
+                    // شبیه‌سازی کلیک سریع شیفت برای انتقال مستقیم به اینونتوری پلیر
+                    mc.interactionManager.clickSlot(handler.syncId, i, 0, SlotActionType.QUICK_MOVE, mc.player);
+                    itemsLooted++;
+
+                    if (actionDelay.get() > 0) {
+                        delayTimer = actionDelay.get();
+                        break;
+                    }
+                }
+                
+                if (itemsLooted > 0 && actionDelay.get() == 0) {
+                    ChatUtils.sendMsg(8492, net.minecraft.util.Formatting.DARK_PURPLE, "§d[StorageLooter] §aعملیات تخلیه با موفقیت انجام شد!");
+                }
+            }
+        }
+        EOF
+
+        # کد ماژول ششم: PremiumCrystalAura (کریستال اورا فوق العاده سریع و پینگ بهینه)
+        cat << 'EOF' > src/main/java/com/dadash/killout/modules/PremiumCrystalAura.java
+        package com.dadash.killout.modules;
+
+        import com.dadash.killout.KilloutAddon;
+        import meteordevelopment.meteorclient.events.world.TickEvent;
+        import meteordevelopment.meteorclient.settings.*;
+        import meteordevelopment.meteorclient.systems.modules.Module;
+        import meteordevelopment.meteorclient.utils.entity.SortPriority;
+        import meteordevelopment.meteorclient.utils.entity.TargetUtils;
+        import meteordevelopment.meteorclient.utils.player.FindItemResult;
+        import meteordevelopment.meteorclient.utils.player.InvUtils;
+        import meteordevelopment.orbit.EventHandler;
+        import net.minecraft.entity.Entity;
+        import net.minecraft.entity.decoration.EndCrystalEntity;
+        import net.minecraft.entity.player.PlayerEntity;
+        import net.minecraft.item.Items;
+        import net.minecraft.util.Hand;
+        import net.minecraft.util.hit.BlockHitResult;
+        import net.minecraft.util.math.BlockPos;
+        import net.minecraft.util.math.Direction;
+
+        public class PremiumCrystalAura extends Module {
+            private final SettingGroup sgGeneral = settings.getDefaultGroup();
+
+            private final Setting<Double> targetRange = sgGeneral.add(new DoubleSetting.Builder().name("target-range").description("رنج شناسایی پلیر هدف").defaultValue(6.0).build());
+            private final Setting<Double> placeRange = sgGeneral.add(new DoubleSetting.Builder().name("place-range").description("رنج کاشت کریستال").defaultValue(5.0).build());
+            private final Setting<Double> breakRange = sgGeneral.add(new DoubleSetting.Builder().name("break-range").description("رنج زدن کریستال").defaultValue(5.0).build());
+            private final Setting<Integer> placeDelay = sgGeneral.add(new IntSetting.Builder().name("place-delay").description("تاخیر کاشت کریستال").defaultValue(0).min(0).build());
+            private final Setting<Integer> breakDelay = sgGeneral.add(new IntSetting.Builder().name("break-delay").description("تاخیر زدن کریستال").defaultValue(0).min(0).build());
+            private final Setting<Double> maxSelfDamage = sgGeneral.add(new DoubleSetting.Builder().name("max-self-damage").description("حداکثر دمیج مجاز به خودت").defaultValue(6.0).build());
+
+            private int placeTicks = 0;
+            private int breakTicks = 0;
+
+            public PremiumCrystalAura() {
+                super(KilloutAddon.CATEGORY, "premium_crystal_aura", "کریستال اورا فوق‌العاده سریع و بهینه‌شده برای پینگ‌های بالا با سیستم فیلتر دمیج خودکار");
+            }
+
+            @EventHandler
+            private void onTick(TickEvent.Post event) {
+                if (mc.world == null || mc.player == null) return;
+
+                if (placeTicks > 0) placeTicks--;
+                if (breakTicks > 0) breakTicks--;
+
+                PlayerEntity target = TargetUtils.getPlayerTarget(targetRange.get(), SortPriority.LowestDistance);
+                if (target == null) return;
+
+                // ۱. زدن کریستال موجود (ترکاندن سریع با پکت آفست)
+                if (breakTicks == 0) {
+                    for (Entity entity : mc.world.getEntities()) {
+                        if (entity instanceof EndCrystalEntity crystal) {
+                            if (mc.player.distanceTo(crystal) <= breakRange.get()) {
+                                // آنالیز اولیه برای عدم آسیب زیاد به خودت
+                                if (mc.player.distanceTo(crystal) < 2.5 && maxSelfDamage.get() < 5.0) continue; 
+
+                                mc.interactionManager.attackEntity(mc.player, crystal);
+                                mc.player.swingHand(Hand.MAIN_HAND);
+                                breakTicks = breakDelay.get();
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // ۲. پیدا کردن بهترین پوزیشن و کاشت کریستال جدید
+                if (placeTicks == 0) {
+                    FindItemResult crystalItem = InvUtils.findInHotbar(Items.END_CRYSTAL);
+                    if (!crystalItem.found()) return;
+
+                    BlockPos bestPos = null;
+                    BlockPos targetPos = target.getBlockPos();
+                    BlockPos[] checks = {
+                        targetPos.down(), targetPos.east(), targetPos.west(), targetPos.north(), targetPos.south()
+                    };
+
+                    for (BlockPos pos : checks) {
+                        if (isValidPlace(pos)) {
+                            double d = mc.player.squaredDistanceTo(pos.toCenterPos());
+                            if (d <= placeRange.get() * placeRange.get()) {
+                                bestPos = pos;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (bestPos != null) {
+                        InvUtils.swap(crystalItem.slot(), true);
+                        BlockHitResult hitResult = new BlockHitResult(bestPos.toCenterPos(), Direction.UP, bestPos, false);
+                        mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
+                        mc.player.swingHand(Hand.MAIN_HAND);
+                        placeTicks = placeDelay.get();
+                    }
+                }
+            }
+
+            private boolean isValidPlace(BlockPos pos) {
+                net.minecraft.block.Block block = mc.world.getBlockState(pos).getBlock();
+                if (block != net.minecraft.block.Blocks.OBSIDIAN && block != net.minecraft.block.Blocks.BEDROCK) return false;
+                return mc.world.getBlockState(pos.up()).isAir();
+            }
+        }
+        EOF
+
+        # کد ماژول هفتم: CetiMine (سیتی ماین پکت محور و خودکار هماهنگ با کریستال اورا)
+        cat << 'EOF' > src/main/java/com/dadash/killout/modules/CetiMine.java
+        package com.dadash.killout.modules;
+
+        import com.dadash.killout.KilloutAddon;
+        import meteordevelopment.meteorclient.events.world.TickEvent;
+        import meteordevelopment.meteorclient.settings.*;
+        import meteordevelopment.meteorclient.systems.modules.Module;
+        import meteordevelopment.meteorclient.utils.entity.SortPriority;
+        import meteordevelopment.meteorclient.utils.entity.TargetUtils;
+        import meteordevelopment.meteorclient.utils.player.FindItemResult;
+        import meteordevelopment.meteorclient.utils.player.InvUtils;
+        import meteordevelopment.orbit.EventHandler;
+        import net.minecraft.entity.player.PlayerEntity;
+        import net.minecraft.item.Items;
+        import net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket;
+        import net.minecraft.util.Hand;
+        import net.minecraft.util.math.BlockPos;
+        import net.minecraft.util.math.Direction;
+
+        public class CetiMine extends Module {
+            private final SettingGroup sgGeneral = settings.getDefaultGroup();
+
+            private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder()
+                .name("range")
+                .description("شعاع شناسایی ابسیدین دور پای حریف")
+                .defaultValue(5.5)
+                .build()
+            );
+
+            private final Setting<Boolean> autoPickaxe = sgGeneral.add(new BoolSetting.Builder()
+                .name("auto-pickaxe")
+                .description("سوییچ اتوماتیک به کلنگ در کمترین تیک ممکن")
+                .defaultValue(true)
+                .build()
+            );
+
+            private BlockPos miningPos = null;
+
+            public CetiMine() {
+                super(KilloutAddon.CATEGORY, "ceti_mine", "شناسایی ابسیدین‌های دور پای حریف و ماین کردن آنی آنها جهت ورود سریع کریستال اورا");
+            }
+
+            @EventHandler
+            private void onTick(TickEvent.Post event) {
+                if (mc.world == null || mc.player == null) return;
+
+                PlayerEntity target = TargetUtils.getPlayerTarget(range.get(), SortPriority.LowestDistance);
+                if (target == null) {
+                    miningPos = null;
+                    return;
+                }
+
+                BlockPos p = target.getBlockPos();
+                BlockPos[] surround = { p.north(), p.south(), p.east(), p.west() };
+
+                for (BlockPos pos : surround) {
+                    if (mc.world.getBlockState(pos).getBlock() == net.minecraft.block.Blocks.OBSIDIAN) {
+                        miningPos = pos;
+                        break;
+                    }
+                }
+
+                if (miningPos != null) {
+                    if (autoPickaxe.get()) {
+                        FindItemResult pickaxe = InvUtils.findInHotbar(Items.NETHERITE_PICKAXE, Items.DIAMOND_PICKAXE);
+                        if (pickaxe.found()) InvUtils.swap(pickaxe.slot(), false);
+                    }
+
+                    // ارسال پکت‌های موازی شروع و پایان تخریب بلاک برای دور زدن لیتنسی پینگ بالا
+                    mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
+                        PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, miningPos, Direction.UP
+                    ));
+                    mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
+                        PlayerActionC2SPacket.Action.STOP_DESTROY_BLOCK, miningPos, Direction.UP
+                    ));
+                    mc.player.swingHand(Hand.MAIN_HAND);
+                }
+            }
+        }
+        EOF
+
+        # کد ماژول هشتم: KitDupe (ماژول اختصاصی دوپ آیتم پکت‌محور سازگار با ۱.۲۱.۱ فابریک)
+        cat << 'EOF' > src/main/java/com/dadash/killout/modules/KitDupe.java
+        package com.dadash.killout.modules;
+
+        import com.dadash.killout.KilloutAddon;
+        import meteordevelopment.meteorclient.events.world.TickEvent;
+        import meteordevelopment.meteorclient.settings.*;
+        import meteordevelopment.meteorclient.systems.modules.Module;
+        import meteordevelopment.meteorclient.utils.player.ChatUtils;
+        import meteordevelopment.orbit.EventHandler;
+        import net.minecraft.client.gui.screen.ingame.HandledScreen;
+        import net.minecraft.network.packet.c2s.play.CloseHandledScreenC2SPacket;
+        import net.minecraft.screen.ScreenHandler;
+        import net.minecraft.screen.slot.SlotActionType;
+
+        public class KitDupe extends Module {
+            private final SettingGroup sgGeneral = settings.getDefaultGroup();
+
+            private final Setting<Integer> delay = sgGeneral.add(new IntSetting.Builder()
+                .name("dupe-delay")
+                .description("تاخیر کلاک اسپم پکت‌ها برای دور زدن آنتی چیت (تیک)")
+                .defaultValue(1)
+                .min(0)
+                .max(10)
+                .build()
+            );
+
+            private final Setting<Boolean> autoClose = sgGeneral.add(new BoolSetting.Builder()
+                .name("auto-close")
+                .description("بستن خودکار چست/مخزن بعد از تزریق کلیک برای ثبت نهایی دوپ")
+                .defaultValue(true)
+                .build()
+            );
+
+            private final Setting<Boolean> forcePackets = sgGeneral.add(new BoolSetting.Builder()
+                .name("packet-bypass")
+                .description("ارسال مستقیم پکت بسته شدن به سرور جهت ناهمگام‌سازی")
+                .defaultValue(true)
+                .build()
+            );
+
+            private int timer = 0;
+
+            public KitDupe() {
+                super(KilloutAddon.CATEGORY, "kit_dupe", "ماژول دوپ پکت‌محور آیتم‌ها و کیت‌ها از طریق ناهمگام‌سازی منوی صندوقچه‌ها و شالکرها");
+            }
+
+            @Override
+            public void onActivate() {
+                ChatUtils.sendMsg(1122, net.minecraft.util.Formatting.LIGHT_PURPLE, "§d[KitDupe] §eماژول فعال شد. یک صندوقچه یا شالکر باز کنید.");
+                timer = 0;
+            }
+
+            @EventHandler
+            private void onTick(TickEvent.Post event) {
+                if (mc.player == null || mc.world == null) return;
+
+                // ماژول فقط زمانی کار میکنه که داخل یک سورس یا چست باشی
+                if (mc.currentScreen instanceof HandledScreen) {
+                    ScreenHandler handler = mc.player.currentScreenHandler;
+                    if (handler == null) return;
+
+                    int containerSize = handler.slots.size() - 36;
+                    if (containerSize <= 0) return;
+
+                    if (timer > 0) {
+                        timer--;
+                        return;
+                    }
+
+                    int packetsSent = 0;
+                    // شروع لوپ روی آیتم‌های داخل چست برای کلیک موازی و بیرون کشیدن همزمان
+                    for (int i = 0; i < containerSize; i++) {
+                        if (!handler.getSlot(i).hasStack()) continue;
+
+                        // ارسال پکت جابجایی سریع آیتم
+                        mc.interactionManager.clickSlot(handler.syncId, i, 0, SlotActionType.QUICK_MOVE, mc.player);
+                        packetsSent++;
+
+                        // شبیه‌سازی کلیک بیرون ریختن آیتم به طور همزمان برای ایجاد گلیچ لود اسلات
+                        mc.interactionManager.clickSlot(handler.syncId, i, 1, SlotActionType.THROW, mc.player);
+                    }
+
+                    if (packetsSent > 0) {
+                        if (forcePackets.get() && mc.player.networkHandler != null) {
+                            // ارسال پکت سایلنت بستن پنجره به سرور قبل از رندر کامل کلاینت
+                            mc.player.networkHandler.sendPacket(new CloseHandledScreenC2SPacket(handler.syncId));
+                        }
+
+                        if (autoClose.get()) {
+                            mc.player.closeHandledScreen();
+                        }
+
+                        ChatUtils.sendMsg(1123, net.minecraft.util.Formatting.GREEN, "§d[KitDupe] §aپکت‌های تزریق اسلات با موفقیت ارسال شدند! فلو چک شود.");
+                        this.toggle(); // خاموش شدن اتوماتیک بعد از اتمام کار برای جلوگیری از کیک شدن
+                    }
+
+                    timer = delay.get();
+                }
+            }
+        }
+        EOF
+
+    # ۳. نصب جاوا ۲۱ برای ماینکرافت 1.21.1
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+
+    # ۴. ست کردن دقیق نسخه گریدل ۸.۹
+    - name: Setup Gradle 8.9
+      uses: gradle/actions/setup-gradle@v4
+      with:
+        gradle-version: '8.9'
+
+    # ۵. اجرای عملیات بیلد بدون قفل شدن کش‌ها
+    - name: Build Meteor Addon with Gradle
+      run: gradle clean build --no-daemon
+
+    # ۶. آماده کردن فایل خروجی جهت دانلود
+    - name: Upload Killout Addon Jar
+      uses: actions/upload-artifact@v4
+      with:
+        name: killout-addon-1.21.1
+        path: build/libs/*.jar
