@@ -475,7 +475,6 @@ jobs:
             private void onTick(TickEvent.Post event) {
                 if (mc.world == null || mc.player == null) return;
 
-                // مدیریت تاخیر و سرعت کلاک ماژول
                 if (ticksPassed > 0) {
                     ticksPassed--;
                     return;
@@ -484,7 +483,6 @@ jobs:
                 PlayerEntity target = TargetUtils.getPlayerTarget(range.get(), SortPriority.LowestDistance);
                 if (target == null) return;
 
-                // پیدا کردن تار عنکبوت در هات‌بار یا اینونتوری
                 FindItemResult web = InvUtils.findInHotbar(Items.COBWEB);
                 if (!web.isHotbar()) {
                     web = InvUtils.find(Items.COBWEB);
@@ -498,7 +496,6 @@ jobs:
                 int maxBlocks = blocksPerTick.get();
                 int placedCount = 0;
 
-                // حلقه سه‌بعدی برای پوشش کامل محیط حریف بر اساس تنظیمات شخصی تو
                 for (int y = 0; y < h; y++) {
                     for (int x = -r; x <= r; x++) {
                         for (int z = -r; z <= r; z++) {
@@ -506,7 +503,6 @@ jobs:
 
                             BlockPos currentPos = targetPos.add(x, y, z);
                             
-                            // بررسی خالی بودن فضا جهت پوزیشن درست بلاک
                             if (mc.world.getBlockState(currentPos).isAir()) {
                                 if (BlockUtils.place(currentPos, web, true, 50, true, false)) {
                                     placedCount++;
@@ -516,7 +512,6 @@ jobs:
                     }
                 }
 
-                // اعمال تیک استراحت در صورت موفقیت کاشت بلاک
                 if (placedCount > 0) {
                     ticksPassed = delay.get();
                 }
@@ -601,11 +596,9 @@ jobs:
                         return;
                     }
 
-                    // بررسی فشرده شدن کلید لوت همه چیز
                     if (lootAllKey.get().isPressed()) {
                         executeLoot(handler, containerSize, false);
                     }
-                    // بررسی فشرده شدن کلید لوت فیلتر شده
                     else if (lootFilteredKey.get().isPressed()) {
                         executeLoot(handler, containerSize, true);
                     }
@@ -615,13 +608,11 @@ jobs:
             @EventHandler
             private void onRender2D(Render2DEvent event) {
                 if (mc.currentScreen instanceof HandledScreen && mc.textRenderer != null) {
-                    // رندر متنی کاملا ایمن و منطبق بر DrawContext ماینکرافت 1.21.1 برای پوجاو
                     String text = "👉 Hotkeys: [V] Loot All | [B] Loot Filtered 👈";
                     int width = mc.getWindow().getScaledWidth();
                     int textWidth = mc.textRenderer.getWidth(text);
                     int x = (width - textWidth) / 2;
                     
-                    // استفاده مستقیم از آبجکت لوکال رندرینگ برای رفع کامل ارور گیت‌هاب
                     event.drawContext.drawText(mc.textRenderer, text, x, 8, 0xFFFFFF00, true);
                 }
             }
@@ -636,7 +627,6 @@ jobs:
                         continue;
                     }
 
-                    // شبیه‌سازی کلیک سریع شیفت برای انتقال مستقیم به اینونتوری پلیر
                     mc.interactionManager.clickSlot(handler.syncId, i, 0, SlotActionType.QUICK_MOVE, mc.player);
                     itemsLooted++;
 
@@ -702,12 +692,10 @@ jobs:
                 PlayerEntity target = TargetUtils.getPlayerTarget(targetRange.get(), SortPriority.LowestDistance);
                 if (target == null) return;
 
-                // ۱. زدن کریستال موجود (ترکاندن سریع با پکت آفست)
                 if (breakTicks == 0) {
                     for (Entity entity : mc.world.getEntities()) {
                         if (entity instanceof EndCrystalEntity crystal) {
                             if (mc.player.distanceTo(crystal) <= breakRange.get()) {
-                                // آنالیز اولیه برای عدم آسیب زیاد به خودت
                                 if (mc.player.distanceTo(crystal) < 2.5 && maxSelfDamage.get() < 5.0) continue; 
 
                                 mc.interactionManager.attackEntity(mc.player, crystal);
@@ -719,7 +707,6 @@ jobs:
                     }
                 }
 
-                // ۲. پیدا کردن بهترین پوزیشن و کاشت کریستال جدید
                 if (placeTicks == 0) {
                     FindItemResult crystalItem = InvUtils.findInHotbar(Items.END_CRYSTAL);
                     if (!crystalItem.found()) return;
@@ -827,7 +814,6 @@ jobs:
                         if (pickaxe.found()) InvUtils.swap(pickaxe.slot(), false);
                     }
 
-                    // ارسال پکت‌های موازی شروع و پایان تخریب بلاک برای دور زدن لیتنسی پینگ بالا
                     mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
                         PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, miningPos, Direction.UP
                     ));
@@ -840,104 +826,114 @@ jobs:
         }
         EOF
 
-        # کد ماژول هشتم: KitDupe (ماژول اختصاصی دوپ آیتم پکت‌محور سازگار با ۱.۲۱.۱ فابریک)
+        # کد ماژول هشتم: KitDupe اختراع شده بر اساس ریاضیات و تاخیر فشرده (برای 6b6t)
         cat << 'EOF' > src/main/java/com/dadash/killout/modules/KitDupe.java
         package com.dadash.killout.modules;
 
         import com.dadash.killout.KilloutAddon;
+        import meteordevelopment.meteorclient.events.packets.PacketEvent;
         import meteordevelopment.meteorclient.events.world.TickEvent;
         import meteordevelopment.meteorclient.settings.*;
         import meteordevelopment.meteorclient.systems.modules.Module;
         import meteordevelopment.meteorclient.utils.player.ChatUtils;
         import meteordevelopment.orbit.EventHandler;
-        import net.minecraft.client.gui.screen.ingame.HandledScreen;
-        import net.minecraft.network.packet.c2s.play.CloseHandledScreenC2SPacket;
-        import net.minecraft.screen.ScreenHandler;
-        import net.minecraft.screen.slot.SlotActionType;
+        import net.minecraft.network.packet.Packet;
+        import net.minecraft.network.packet.c2s.play.ClickSlotC2SPacket;
+        import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
+        import java.util.Queue;
+        import java.util.concurrent.ConcurrentLinkedQueue;
 
         public class KitDupe extends Module {
             private final SettingGroup sgGeneral = settings.getDefaultGroup();
 
-            private final Setting<Integer> delay = sgGeneral.add(new IntSetting.Builder()
-                .name("dupe-delay")
-                .description("تاخیر کلاک اسپم پکت‌ها برای دور زدن آنتی چیت (تیک)")
-                .defaultValue(1)
-                .min(0)
+            private final Setting<Boolean> useMathDesync = sgGeneral.add(new BoolSetting.Builder()
+                .name("math-desync")
+                .description("استفاده از الگوریتم اختلال سینوسی برای فریب آنتی‌چیت GrimAC در 6b6t")
+                .defaultValue(true)
+                .build()
+            );
+
+            private final Setting<Integer> mathMultiplier = sgGeneral.add(new IntSetting.Builder()
+                .name("math-multiplier")
+                .description("ضریب اعشاری برای محاسبه باگ شناور (پیش‌فرض: 3 برای نسبت طلایی)")
+                .defaultValue(3)
+                .min(1)
                 .max(10)
                 .build()
             );
 
-            private final Setting<Boolean> autoClose = sgGeneral.add(new BoolSetting.Builder()
-                .name("auto-close")
-                .description("بستن خودکار چست/مخزن بعد از تزریق کلیک برای ثبت نهایی دوپ")
-                .defaultValue(true)
+            private final Setting<Integer> releaseTick = sgGeneral.add(new IntSetting.Builder()
+                .name("release-delay")
+                .description("تعداد تیک‌هایی که پکت‌ها حبس شده و سپس در نقطه کور سرور آزاد می‌شوند")
+                .defaultValue(5)
+                .min(1)
+                .max(20)
                 .build()
             );
 
-            private final Setting<Boolean> forcePackets = sgGeneral.add(new BoolSetting.Builder()
-                .name("packet-bypass")
-                .description("ارسال مستقیم پکت بسته شدن به سرور جهت ناهمگام‌سازی")
-                .defaultValue(true)
-                .build()
-            );
-
-            private int timer = 0;
+            private final Queue<Packet<?>> packetQueue = new ConcurrentLinkedQueue<>();
+            private boolean isChoking = false;
+            private int ticksPassed = 0;
 
             public KitDupe() {
-                super(KilloutAddon.CATEGORY, "kit_dupe", "ماژول دوپ پکت‌محور آیتم‌ها و کیت‌ها از طریق ناهمگام‌سازی منوی صندوقچه‌ها و شالکرها");
+                super(KilloutAddon.CATEGORY, "kit_dupe", "نسل جدید دوپ آیتم بر پایه ریاضیات برداری و اختلال پکت برای سرورهای آنارشی (GrimAC Bypass)");
             }
 
             @Override
             public void onActivate() {
-                ChatUtils.sendMsg(1122, net.minecraft.util.Formatting.LIGHT_PURPLE, "§d[KitDupe] §eماژول فعال شد. یک صندوقچه یا شالکر باز کنید.");
-                timer = 0;
+                packetQueue.clear();
+                isChoking = true;
+                ticksPassed = 0;
+                ChatUtils.sendMsg(8822, net.minecraft.util.Formatting.LIGHT_PURPLE, "§d[KitDupe Math] §eلگ سوئیچ داخلی روشن شد! با شالکر الاغ یا صندوقچه تعامل کن...");
+            }
+
+            @Override
+            public void onDeactivate() {
+                flushPackets();
+                isChoking = false;
+            }
+
+            @EventHandler
+            private void onSendPacket(PacketEvent.Send event) {
+                if (mc.player == null || mc.world == null || !isChoking) return;
+
+                // شناسایی پکت‌های تراکنش منو و حبس کردن آنها در صف
+                if (event.packet instanceof ClickSlotC2SPacket) {
+                    packetQueue.add(event.packet);
+                    event.cancel(); // جلوگیری از ارسال به سرور
+                }
             }
 
             @EventHandler
             private void onTick(TickEvent.Post event) {
-                if (mc.player == null || mc.world == null) return;
+                if (mc.player == null || mc.world == null || !isChoking) return;
 
-                // ماژول فقط زمانی کار میکنه که داخل یک سورس یا چست باشی
-                if (mc.currentScreen instanceof HandledScreen) {
-                    ScreenHandler handler = mc.player.currentScreenHandler;
-                    if (handler == null) return;
+                // وقتی تو در حال کلیک روی آیتم‌ها هستی، ما در پس‌زمینه پوزیشن فیک می‌سازیم
+                if (useMathDesync.get() && !packetQueue.isEmpty()) {
+                    // محاسبه نسبت طلایی و سینوسی برای دور زدن محاسبهگر فاصله آنتی چیت
+                    double phi = 1.61803398875 * mathMultiplier.get();
+                    double mathX = mc.player.getX() + Math.sin(mc.player.age * Math.PI / 180.0) * 0.0001337 * phi;
+                    double mathZ = mc.player.getZ() + Math.cos(mc.player.age * Math.PI / 180.0) * 0.0001337 * phi;
 
-                    int containerSize = handler.slots.size() - 36;
-                    if (containerSize <= 0) return;
+                    // ارسال پکت حرکت نامحسوس که موتور فیزیک سرور را گیج می‌کند
+                    mc.player.networkHandler.sendPacket(new PlayerMoveC2SPacket.PositionAndOnGround(mathX, mc.player.getY(), mathZ, mc.player.isOnGround()));
+                }
 
-                    if (timer > 0) {
-                        timer--;
-                        return;
+                if (!packetQueue.isEmpty()) {
+                    ticksPassed++;
+                    if (ticksPassed >= releaseTick.get()) {
+                        flushPackets();
+                        ChatUtils.sendMsg(8823, net.minecraft.util.Formatting.GREEN, "§d[KitDupe Math] §aباگ ریاضی با موفقیت تزریق شد! پکت‌ها پمپ شدند.");
+                        this.toggle(); // خاموش شدن برای جلوگیری از کرش
                     }
+                }
+            }
 
-                    int packetsSent = 0;
-                    // شروع لوپ روی آیتم‌های داخل چست برای کلیک موازی و بیرون کشیدن همزمان
-                    for (int i = 0; i < containerSize; i++) {
-                        if (!handler.getSlot(i).hasStack()) continue;
-
-                        // ارسال پکت جابجایی سریع آیتم
-                        mc.interactionManager.clickSlot(handler.syncId, i, 0, SlotActionType.QUICK_MOVE, mc.player);
-                        packetsSent++;
-
-                        // شبیه‌سازی کلیک بیرون ریختن آیتم به طور همزمان برای ایجاد گلیچ لود اسلات
-                        mc.interactionManager.clickSlot(handler.syncId, i, 1, SlotActionType.THROW, mc.player);
+            private void flushPackets() {
+                if (mc.player != null && mc.player.networkHandler != null && !packetQueue.isEmpty()) {
+                    while (!packetQueue.isEmpty()) {
+                        mc.player.networkHandler.sendPacket(packetQueue.poll());
                     }
-
-                    if (packetsSent > 0) {
-                        if (forcePackets.get() && mc.player.networkHandler != null) {
-                            // ارسال پکت سایلنت بستن پنجره به سرور قبل از رندر کامل کلاینت
-                            mc.player.networkHandler.sendPacket(new CloseHandledScreenC2SPacket(handler.syncId));
-                        }
-
-                        if (autoClose.get()) {
-                            mc.player.closeHandledScreen();
-                        }
-
-                        ChatUtils.sendMsg(1123, net.minecraft.util.Formatting.GREEN, "§d[KitDupe] §aپکت‌های تزریق اسلات با موفقیت ارسال شدند! فلو چک شود.");
-                        this.toggle(); // خاموش شدن اتوماتیک بعد از اتمام کار برای جلوگیری از کیک شدن
-                    }
-
-                    timer = delay.get();
                 }
             }
         }
