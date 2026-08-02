@@ -9,30 +9,48 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Install ttyd and cloudflared
+
+      - name: Install packages
         run: |
           sudo apt update
-          sudo apt install -y wget
+          sudo apt install -y wget curl
 
-          wget -O ttyd.tar.gz https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64
-          tar -xzf ttyd.tar.gz
-          sudo mv ttyd /usr/local/bin/
+      - name: Install ttyd
+        run: |
+          wget -O ttyd https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64
+          chmod +x ttyd
+          sudo mv ttyd /usr/local/bin/ttyd
 
+      - name: Install cloudflared
+        run: |
           wget -O cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared.deb
 
       - name: Start Web Terminal
         run: |
-          ttyd -p 7681 bash &
+          echo "Starting ttyd..."
+
+          ttyd \
+          -p 7681 \
+          -W \
+          bash &
 
           sleep 5
 
-          cloudflared tunnel --url http://localhost:7681 > cloudflare.log 2>&1 &
+          echo "Starting Cloudflare Tunnel..."
 
-          sleep 10
+          cloudflared tunnel \
+          --url http://localhost:7681 \
+          > cloudflare.log 2>&1 &
 
-          cat cloudflare.log | grep trycloudflare
+          sleep 15
 
-          while true; do
+          echo "=============================="
+          echo "YOUR WEB TERMINAL:"
+          cat cloudflare.log | grep -o "https://[-a-zA-Z0-9]*\.trycloudflare\.com"
+          echo "=============================="
+
+          while true
+          do
             sleep 60
           done
