@@ -1,32 +1,37 @@
-name: Termux SSH
+name: Cloudflare Web Terminal
 
 on:
   workflow_dispatch:
 
 jobs:
-  ssh:
+  terminal:
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
     steps:
-      - name: Install tmate
+      - name: Install ttyd and cloudflared
         run: |
           sudo apt update
-          sudo apt install -y tmate
+          sudo apt install -y wget
 
-      - name: Start SSH
+          wget -O ttyd.tar.gz https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64
+          tar -xzf ttyd.tar.gz
+          sudo mv ttyd /usr/local/bin/
+
+          wget -O cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
+
+      - name: Start Web Terminal
         run: |
-          tmate -S /tmp/tmate.sock new-session -d
-          tmate -S /tmp/tmate.sock wait tmate-ready
+          ttyd -p 7681 bash &
 
-          echo "=============================="
-          echo "SSH Command:"
-          tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}'
+          sleep 5
 
-          echo ""
-          echo "Web:"
-          tmate -S /tmp/tmate.sock display -p '#{tmate_web}'
-          echo "=============================="
+          cloudflared tunnel --url http://localhost:7681 > cloudflare.log 2>&1 &
+
+          sleep 10
+
+          cat cloudflare.log | grep trycloudflare
 
           while true; do
             sleep 60
