@@ -9,23 +9,23 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Install Tmate
+      - name: Install tmate
         run: |
           sudo apt update
           sudo apt install -y tmate
 
-      - name: Start SSH Session
+      - name: Start SSH
         run: |
-          tmate -F &
-          sleep 10
+          tmate -S /tmp/tmate.sock new-session -d
+          tmate -S /tmp/tmate.sock wait tmate-ready
 
-          echo ""
           echo "=============================="
           echo "SSH Command:"
-          tmate display -p '#{tmate_ssh}'
+          tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}'
+
           echo ""
-          echo "Web Terminal:"
-          tmate display -p '#{tmate_web}'
+          echo "Web:"
+          tmate -S /tmp/tmate.sock display -p '#{tmate_web}'
           echo "=============================="
 
           while true; do
